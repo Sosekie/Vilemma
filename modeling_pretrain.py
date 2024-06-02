@@ -10,6 +10,8 @@ from timm.models.registry import register_model
 from timm.models.layers import trunc_normal_ as __call_trunc_normal_
 
 
+if_print = False
+
 
 def trunc_normal_(tensor, mean=0., std=1.):
     __call_trunc_normal_(tensor, mean=mean, std=std, a=-std, b=std)
@@ -94,12 +96,28 @@ class PretrainVisionTransformerEncoder(nn.Module):
         B, _, C = x.shape
         x_vis = x[~mask].reshape(B, -1, C) # ~mask means visible
 
+        if if_print:
+            print('-----------------------------------')
+            print('mask     : ', mask.size())
+            print('x        : ', x.size())
+            print('x[~mask] : ', x[~mask].size())
+            print('x_vis    : ', x_vis.size())
+
+        count = 1
         if self.use_checkpoint:
+            if if_print:
+                print('using checkpoint')
             for blk in self.blocks:
                 x_vis = checkpoint.checkpoint(blk, x_vis)
-        else:   
+                if if_print:
+                    print(f'x_vis - {count}: {x_vis.size()}')
+        else:
+            if if_print:   
+                print('no checkpoint')
             for blk in self.blocks:
                 x_vis = blk(x_vis)
+                if if_print:
+                    print(f'x_vis - {count}: {x_vis.size()}')
 
         x_vis = self.norm(x_vis)
         return x_vis
