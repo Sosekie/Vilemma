@@ -12,7 +12,8 @@ from pathlib import Path
 import subprocess
 import torch
 import torch.distributed as dist
-from torch._six import inf
+# from torch._six import inf
+inf = float('inf')
 import random
 
 from tensorboardX import SummaryWriter

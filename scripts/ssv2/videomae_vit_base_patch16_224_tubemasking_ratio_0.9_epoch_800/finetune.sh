@@ -1,14 +1,14 @@
 # Set the path to save checkpoints
-OUTPUT_DIR='YOUR_PATH/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/eval_lr_5e-4_epoch_50'
+OUTPUT_DIR='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/eval_lr_5e-4_epoch_50'
 # path to SSV2 set (train.csv/val.csv/test.csv)
-DATA_PATH='YOUR_PATH/list_ssv2'
+DATA_PATH='SSV/list_ssv2'
 # path to pretrain model
-MODEL_PATH='YOUR_PATH/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/checkpoint-799.pth'
+MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/checkpoint-799.pth'
 
 # batch_size can be adjusted according to number of GPUs
 # this script is for 64 GPUs (8 nodes x 8 GPUs)
-OMP_NUM_THREADS=1 python -m torch.distributed.launch --nproc_per_node=8 \
-    --master_port 12320 --nnodes=8  --node_rank=$1 --master_addr=$2 \
+OMP_NUM_THREADS=1 torchrun --nproc_per_node=1 \
+    --master_port 12320 --nnodes=1  --node_rank=0 --master_addr=127.0.0.1 \
     run_class_finetuning.py \
     --model vit_base_patch16_224 \
     --data_set SSV2 \
