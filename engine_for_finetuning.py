@@ -10,10 +10,24 @@ import utils
 from scipy.special import softmax
 
 
-def train_class_batch(model, samples, target, criterion):
-    outputs = model(samples)
+def train_class_batch(model, samples, target, criterion, using_jigsaw = True):
+
+    loss_position = None
+
+    if using_jigsaw:
+        outputs, loss_position = model(samples, using_jigsaw)
+    else:
+        outputs = model(samples, using_jigsaw)
+
     loss = criterion(outputs, target)
-    return loss, outputs
+
+    if loss_position:
+        total_loss = loss + loss_position
+        # print('loss: ', loss, ' - loss_position: ', loss_position)
+    else:
+        total_loss = loss
+
+    return total_loss, outputs
 
 
 def get_loss_scale_for_deepspeed(model):
