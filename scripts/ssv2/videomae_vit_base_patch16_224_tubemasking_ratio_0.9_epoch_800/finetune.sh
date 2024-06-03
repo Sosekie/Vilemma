@@ -3,7 +3,8 @@ OUTPUT_DIR='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_rat
 # path to SSV2 set (train.csv/val.csv/test.csv)
 DATA_PATH='SSV/list_ssv2'
 # path to pretrain model
-MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/checkpoint-799.pth'
+# MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/checkpoint-799.pth'
+MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/ori_finish_eval_lr_5e-4_epoch_50/checkpoint-best/mp_rank_00_model_states.pt'
 
 # batch_size can be adjusted according to number of GPUs
 # this script is for 64 GPUs (8 nodes x 8 GPUs)

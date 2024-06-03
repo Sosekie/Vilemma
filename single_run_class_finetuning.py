@@ -19,11 +19,13 @@ from optim_factory import create_optimizer, get_parameter_groups, LayerDecayValu
 from datasets import build_dataset
 from engine_for_finetuning import train_one_epoch, validation_one_epoch, final_test, merge
 from utils import NativeScalerWithGradNormCount as NativeScaler
-from utils import  multiple_samples_collate
+from utils import multiple_samples_collate
 import utils
 import modeling_finetune
 
 import sys
+
+if_print = True
 
 def get_args():
     parser = argparse.ArgumentParser('VideoMAE fine-tuning and evaluation script for video classification', add_help=False)
@@ -188,6 +190,8 @@ def get_args():
                         help='url used to set up distributed training')
 
     parser.add_argument('--enable_deepspeed', action='store_true', default=False)
+    parser.add_argument('--no_distributed_training', action='store_true', default=False,
+                        help='Disable distributed training')
 
     known_args, _ = parser.parse_known_args()
 
@@ -209,13 +213,13 @@ def get_args():
 def main(args, ds_init):
 
     try:
-
-        utils.init_distributed_mode(args)
+        if not args.no_distributed_training:
+            utils.init_distributed_mode(args)
 
         if ds_init is not None:
             utils.create_ds_config(args)
 
-        # print(args)
+        print(args)
 
         device = torch.device(args.device)
 
@@ -234,25 +238,30 @@ def main(args, ds_init):
             dataset_val, _ = build_dataset(is_train=False, test_mode=False, args=args)
         dataset_test, _ = build_dataset(is_train=False, test_mode=True, args=args)
         
-        num_tasks = utils.get_world_size()
-        global_rank = utils.get_rank()
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-        )
-        print("Sampler_train = %s" % str(sampler_train))
-        if args.dist_eval:
-            if len(dataset_val) % num_tasks != 0:
-                print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                        'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                        'equal num of samples per-process.')
-            sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-            sampler_test = torch.utils.data.DistributedSampler(
-                dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+        if not args.no_distributed_training:
+            num_tasks = utils.get_world_size()
+            global_rank = utils.get_rank()
+            sampler_train = torch.utils.data.DistributedSampler(
+                dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+            )
+            print("Sampler_train = %s" % str(sampler_train))
+            if args.dist_eval:
+                if len(dataset_val) % num_tasks != 0:
+                    print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+                            'This will slightly alter validation results as extra duplicate entries are added to achieve '
+                            'equal num of samples per-process.')
+                sampler_val = torch.utils.data.DistributedSampler(
+                    dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+                sampler_test = torch.utils.data.DistributedSampler(
+                    dataset_test, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+            else:
+                sampler_val = torch.utils.data.SequentialSampler(dataset_val)
         else:
+            sampler_train = torch.utils.data.RandomSampler(dataset_train)
             sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+            sampler_test = torch.utils.data.SequentialSampler(dataset_test)
 
-        if global_rank == 0 and args.log_dir is not None:
+        if args.log_dir and utils.is_main_process():
             os.makedirs(args.log_dir, exist_ok=True)
             log_writer = utils.TensorboardLogger(log_dir=args.log_dir)
         else:
@@ -330,10 +339,8 @@ def main(args, ds_init):
                     args.finetune, map_location='cpu', check_hash=True)
             else:
                 checkpoint = torch.load(args.finetune, map_location='cpu')
-            
-            # print('checkpoint: ', checkpoint)
 
-            # print("Load ckpt from %s" % args.finetune)
+            print("Load ckpt from %s" % args.finetune)
             checkpoint_model = None
             for model_key in args.model_key.split('|'):
                 if model_key in checkpoint:
@@ -348,8 +355,6 @@ def main(args, ds_init):
                     print(f"Removing key {k} from pretrained checkpoint")
                     del checkpoint_model[k]
 
-            print('---------------------Main_1---------------------')
-
             all_keys = list(checkpoint_model.keys())
             new_dict = OrderedDict()
             for key in all_keys:
@@ -360,8 +365,6 @@ def main(args, ds_init):
                 else:
                     new_dict[key] = checkpoint_model[key]
             checkpoint_model = new_dict
-
-            print('---------------------Main_2---------------------')
 
             # interpolate position embedding
             if 'pos_embed' in checkpoint_model:
@@ -390,8 +393,6 @@ def main(args, ds_init):
                     pos_tokens = pos_tokens.flatten(1, 3) # B, L, C
                     new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
                     checkpoint_model['pos_embed'] = new_pos_embed
-            
-            print('---------------------Main_3---------------------')
 
             utils.load_state_dict(model, checkpoint_model, prefix=args.model_prefix)
 
@@ -412,7 +413,7 @@ def main(args, ds_init):
         print("Model = %s" % str(model_without_ddp))
         print('number of params:', n_parameters)
 
-        total_batch_size = args.batch_size * args.update_freq * utils.get_world_size()
+        total_batch_size = args.batch_size * args.update_freq * (utils.get_world_size() if not args.no_distributed_training else 1)
         num_training_steps_per_epoch = len(dataset_train) // total_batch_size
         args.lr = args.lr * total_batch_size / 256
         args.min_lr = args.min_lr * total_batch_size / 256
@@ -441,14 +442,16 @@ def main(args, ds_init):
                 model, args.weight_decay, skip_weight_decay_list,
                 assigner.get_layer_id if assigner is not None else None,
                 assigner.get_scale if assigner is not None else None)
+            if not args.no_distributed_training:
+                utils.init_distributed_mode(args)
             model, optimizer, _, _ = ds_init(
-                args=args, model=model, model_parameters=optimizer_params, dist_init_required=not args.distributed,
+                args=args, model=model, model_parameters=optimizer_params, dist_init_required=not args.no_distributed_training,
             )
 
             print("model.gradient_accumulation_steps() = %d" % model.gradient_accumulation_steps())
             assert model.gradient_accumulation_steps() == args.update_freq
         else:
-            if args.distributed:
+            if not args.no_distributed_training:
                 model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
                 model_without_ddp = model.module
 
@@ -457,23 +460,17 @@ def main(args, ds_init):
                 get_num_layer=assigner.get_layer_id if assigner is not None else None, 
                 get_layer_scale=assigner.get_scale if assigner is not None else None)
             loss_scaler = NativeScaler()
-        
-        print('---------------------Main_4---------------------')
 
         print("Use step level LR scheduler!")
         lr_schedule_values = utils.cosine_scheduler(
             args.lr, args.min_lr, args.epochs, num_training_steps_per_epoch,
             warmup_epochs=args.warmup_epochs, warmup_steps=args.warmup_steps,
         )
-        print('---------------------Main_4_1-------------------')
         if args.weight_decay_end is None:
             args.weight_decay_end = args.weight_decay
-        print('---------------------Main_4_2-------------------')
         wd_schedule_values = utils.cosine_scheduler(
             args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
         print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
-
-        print('---------------------Main_5---------------------')
 
         if mixup_fn is not None:
             # smoothing is handled with mixup label transform
@@ -485,19 +482,18 @@ def main(args, ds_init):
 
         print("criterion = %s" % str(criterion))
 
-        print('---------------------Main_6---------------------')
-
         utils.auto_load_model(
             args=args, model=model, model_without_ddp=model_without_ddp,
             optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
 
         if args.eval:
-            preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
+            preds_file = os.path.join(args.output_dir, str(utils.get_rank()) + '.txt')
             test_stats = final_test(data_loader_test, model, device, preds_file)
-            torch.distributed.barrier()
-            if global_rank == 0:
+            if utils.is_dist_avail_and_initialized():
+                torch.distributed.barrier()
+            if utils.is_main_process():
                 print("Start merging results...")
-                final_top1 ,final_top5 = merge(args.output_dir, num_tasks)
+                final_top1 ,final_top5 = merge(args.output_dir, utils.get_world_size())
                 print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
                 log_stats = {'Final top-1': final_top1,
                             'Final Top-5': final_top5}
@@ -505,15 +501,13 @@ def main(args, ds_init):
                     with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                         f.write(json.dumps(log_stats) + "\n")
             exit(0)
-        
-        print('---------------------Main_7---------------------')
             
 
         print(f"Start training for {args.epochs} epochs")
         start_time = time.time()
         max_accuracy = 0.0
         for epoch in range(args.start_epoch, args.epochs):
-            if args.distributed:
+            if utils.is_dist_avail_and_initialized():
                 data_loader_train.sampler.set_epoch(epoch)
             if log_writer is not None:
                 log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
@@ -559,12 +553,13 @@ def main(args, ds_init):
                 with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
-        preds_file = os.path.join(args.output_dir, str(global_rank) + '.txt')
+        preds_file = os.path.join(args.output_dir, str(utils.get_rank()) + '.txt')
         test_stats = final_test(data_loader_test, model, device, preds_file)
-        torch.distributed.barrier()
-        if global_rank == 0:
+        if utils.is_dist_avail_and_initialized():
+            torch.distributed.barrier()
+        if utils.is_main_process():
             print("Start merging results...")
-            final_top1 ,final_top5 = merge(args.output_dir, num_tasks)
+            final_top1 ,final_top5 = merge(args.output_dir, utils.get_world_size())
             print(f"Accuracy of the network on the {len(dataset_test)} test videos: Top-1: {final_top1:.2f}%, Top-5: {final_top5:.2f}%")
             log_stats = {'Final top-1': final_top1,
                         'Final Top-5': final_top5}
@@ -582,18 +577,7 @@ def main(args, ds_init):
         sys.exit(1)
 
 if __name__ == '__main__':
-
-    try:
-        opts, ds_init = get_args()
-        print('Success load args')
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        sys.exit(1)
-
+    opts, ds_init = get_args()
     if opts.output_dir:
-        print('mkdir')
         Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
-    else:
-        print('no mkdir')
-
     main(opts, ds_init)

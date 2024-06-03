@@ -383,24 +383,65 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     return total_norm
 
 
+# def cosine_scheduler(base_value, final_value, epochs, niter_per_ep, warmup_epochs=0,
+#                      start_warmup_value=0, warmup_steps=-1):
+#     warmup_schedule = np.array([])
+#     warmup_iters = warmup_epochs * niter_per_ep
+#     if warmup_steps > 0:
+#         warmup_iters = warmup_steps
+#     print("Set warmup steps = %d" % warmup_iters)
+#     if warmup_epochs > 0:
+#         warmup_schedule = np.linspace(start_warmup_value, base_value, warmup_iters)
+
+#     iters = np.arange(epochs * niter_per_ep - warmup_iters)
+#     schedule = np.array(
+#         [final_value + 0.5 * (base_value - final_value) * (1 + math.cos(math.pi * i / (len(iters)))) for i in iters])
+
+#     schedule = np.concatenate((warmup_schedule, schedule))
+
+#     assert len(schedule) == epochs * niter_per_ep
+#     return schedule
+
+
+import numpy as np
+import math
+
 def cosine_scheduler(base_value, final_value, epochs, niter_per_ep, warmup_epochs=0,
                      start_warmup_value=0, warmup_steps=-1):
     warmup_schedule = np.array([])
     warmup_iters = warmup_epochs * niter_per_ep
     if warmup_steps > 0:
         warmup_iters = warmup_steps
+    
+    # make sure warmup_iters <= total epoch
+    total_iters = epochs * niter_per_ep
+    if warmup_iters >= total_iters:
+        warmup_iters = total_iters
+        print(f"Adjusted warmup steps to {warmup_iters} to match total iterations")
+    
     print("Set warmup steps = %d" % warmup_iters)
+    
     if warmup_epochs > 0:
         warmup_schedule = np.linspace(start_warmup_value, base_value, warmup_iters)
+        print(f"Warmup schedule: {warmup_schedule}")
 
-    iters = np.arange(epochs * niter_per_ep - warmup_iters)
+    iters = np.arange(total_iters - warmup_iters)
+    print(f"Total iterations: {len(iters)}")
+    print(f"Base value: {base_value}, Final value: {final_value}")
+    
     schedule = np.array(
-        [final_value + 0.5 * (base_value - final_value) * (1 + math.cos(math.pi * i / (len(iters)))) for i in iters])
+        [final_value + 0.5 * (base_value - final_value) * (1 + math.cos(math.pi * i / (len(iters)))) for i in iters]
+    )
+    print(f"Schedule (without warmup): {schedule}")
 
     schedule = np.concatenate((warmup_schedule, schedule))
+    print(f"Final schedule: {schedule}")
 
-    assert len(schedule) == epochs * niter_per_ep
+    assert len(schedule) == total_iters, \
+        f"Schedule length {len(schedule)} does not match expected length {total_iters}"
+    
     return schedule
+
 
 
 def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler, model_ema=None):

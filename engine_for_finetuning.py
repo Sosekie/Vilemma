@@ -245,7 +245,7 @@ def merge(eval_path, num_tasks):
             label = line.split(']')[1].split(' ')[1]
             chunk_nb = line.split(']')[1].split(' ')[2]
             split_nb = line.split(']')[1].split(' ')[3]
-            data = np.fromstring(line.split('[')[1].split(']')[0], dtype=np.float, sep=',')
+            data = np.fromstring(line.split('[')[1].split(']')[0], dtype=np.float64, sep=',')
             data = softmax(data)
             if not name in dict_feats:
                 dict_feats[name] = []
