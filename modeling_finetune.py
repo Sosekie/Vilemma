@@ -314,15 +314,24 @@ class VisionTransformer(nn.Module):
             jigsaw = torch.ones((B, 2, 8, 14, 14), dtype=torch.bool)
 
             # 4. Randomly swap two spatial blocks and update jigsaw
+            print('------choosing idx------')
             for i in range(B):
-                idx1, idx2 = torch.randint(0, 14, (2,)), torch.randint(0, 14, (2,))
+                # Generate two different random indices for spatial swap
+                while True:
+                    idx1, idx2 = torch.randint(0, 14, (2,)), torch.randint(0, 14, (2,))
+                    if not (idx1 == idx2).all():
+                        break
+                print('idx1, idx2: ', idx1, idx2)
                 x_position[:, :, :, idx1[0], idx1[1]], x_position[:, :, :, idx2[0], idx2[1]] = x_position[:, :, :, idx2[0], idx2[1]].clone(), x_position[:, :, :, idx1[0], idx1[1]].clone()
                 jigsaw[i, 0, :, idx1[0], idx1[1]] = False
                 jigsaw[i, 0, :, idx2[0], idx2[1]] = False
 
             # 5. Randomly swap two temporal blocks and update jigsaw
             for i in range(B):
-                idx1, idx2 = torch.randint(0, 8, (2,))
+                while True:
+                    idx1, idx2 = torch.randint(0, 8, (2,))
+                    if idx1.item() != idx2.item():
+                        break
                 x_position[:, :, idx1, :, :], x_position[:, :, idx2, :, :] = x_position[:, :, idx2, :, :].clone(), x_position[:, :, idx1, :, :].clone()
                 jigsaw[i, 1, idx1, :, :] = False
                 jigsaw[i, 1, idx2, :, :] = False
