@@ -268,89 +268,95 @@ class VisionTransformer(nn.Module):
 
     def forward_features(self, x, using_jigsaw = False):
 
-        # [8, 3, 16, 224, 224]
-        B, _, T, H, W = x.size()
+        B, _, T, H, W = x.size() # [8, 3, 16, 224, 224]
 
-        x = self.patch_embed(x)
-
-        # [8, 1568, 768]
+        x = self.patch_embed(x) # [8, 1568, 768]
 
         if self.pos_embed is not None:
             x = x + self.pos_embed.expand(B, -1, -1).type_as(x).to(x.device).clone().detach()
-        x = self.pos_drop(x)
+        x = self.pos_drop(x) # [8, 1568, 768]
 
-        # [8, 1568, 768]
-
-        if self.use_checkpoint:
-            # print('using checkpoint')
-            for blk in self.blocks:
-                x = checkpoint.checkpoint(blk, x)
-        else:
-            # print('no checkpoint')
-            for blk in self.blocks:
-                x = blk(x)
-
-        x = self.norm(x)
-        
-        # [8, 1568, 768]
+        # 1. 将self.pos_drop(x)得到的x从[8, 1568, 768] reshape回 [8, 768, 1568]；
+        # 2. 将self.pos_drop(x)得到的x从[8, 768, 1568] reshape回 [8, 768, 8, 14, 14]；
+        # 3. 初始化jigsaw = [8, 2, 8, 14, 14]为全True，其中第一维度表示batchsize，2表示有两种标签:[spatial_position, temporal_position]，[8, 14, 14]表示时间，高，宽；
+        # 4. 从x中随机选择两块，将它们空间位置交换。比如本来在[8, 768, 8, [1, 1]]位置的和[8, 768, 8, [4, 4]]交换，标记它们的spatial_position为False；
+        # 5. 再从x中随机选择两块，将它们时间位置交换。比如本来在[8, 768, [3], 14, 14]]位置的和[8, 768, [6], 14, 14]]交换，标记它们的temporal_position为False；
+        # 6. 将x从[8, 768, 8, 14, 14] reshape回 [8, 1568, 768]；
+        # 7. 前向传播；
+        # 8. 将x从[8, 1568, 768] reshape回 [8, 768, 8, 14, 14]；
+        # 9. 初始化一个MLP，输入是x[8, 768, 8, 14, 14]，输出是x_position[8, 2, 8, 14, 14]，做二分类，得到0（预测为位置不对）或者1（预测为位置正确）；
+        # 10. x_position和jigsaw = [8, 2, 8, 14, 14]计算交叉熵损失，得到loss_position；
+        # 11. 将x从[8, 768, 8, 14, 14] reshape回 [8, 1568, 768]；
+        # 12. 继续之后的步骤。
 
         if using_jigsaw:
-            # todo（就在这里完成前向传播和损失计算）: 
-            # 1. 将self.norm(x)得到的x，从[8, 1568, 768] reshape回 [8, 768, 8, 14, 14]；
-            # 2. 初始化jigsaw = [8, 2, 8, 14, 14]为全True，其中第一维度表示batchsize，2表示有两种标签:[spatial_position, temporal_position]，[8, 14, 14]表示时间，高，宽；
-            # 3. 从x中随机选择两块，将它们空间位置交换。比如本来在[8, 768, 8, [1, 1]]位置的和[8, 768, 8, [4, 4]]交换，标记它们的spatial_position为False；
-            # 4. 再从x中随机选择两块，将它们时间位置交换。比如本来在[8, 768, [3], 14, 14]]位置的和[8, 768, [6], 14, 14]]交换，标记它们的temporal_position为False；
-            # 5. 得到新的jigsaw标签；
-            # 6. 初始化一个MLP，输入是x[8, 768, 8, 14, 14]，输出是x_position[8, 2, 8, 14, 14]，做二分类，得到0（预测为位置不对）或者1（预测为位置正确）
-            # 7. 和jigsaw = [8, 2, 8, 14, 14]计算交叉熵损失，得到loss_position
-            
+
             # 1. Transpose x to [8, 768, 1568]
-            x_position = x.transpose(1, 2)
-            
+            x = x.transpose(1, 2)
+
             # 2. Reshape x to [8, 768, 8, 14, 14]
-            x_position = x_position.view(B, 768, 8, 14, 14)
+            x = x.view(B, 768, 8, 14, 14)
 
             # 3. Initialize jigsaw as [8, 2, 8, 14, 14] with all True
             jigsaw = torch.ones((B, 2, 8, 14, 14), dtype=torch.bool)
 
             # 4. Randomly swap two spatial blocks and update jigsaw
-            print('------choosing idx------')
-            for i in range(B):
-                # Generate two different random indices for spatial swap
-                while True:
-                    idx1, idx2 = torch.randint(0, 14, (2,)), torch.randint(0, 14, (2,))
-                    if not (idx1 == idx2).all():
-                        break
-                print('idx1, idx2: ', idx1, idx2)
-                x_position[:, :, :, idx1[0], idx1[1]], x_position[:, :, :, idx2[0], idx2[1]] = x_position[:, :, :, idx2[0], idx2[1]].clone(), x_position[:, :, :, idx1[0], idx1[1]].clone()
-                jigsaw[i, 0, :, idx1[0], idx1[1]] = False
-                jigsaw[i, 0, :, idx2[0], idx2[1]] = False
+            # Generate two different random indices for spatial swap
+            while True:
+                idx1, idx2 = torch.randint(0, 14, (2,)), torch.randint(0, 14, (2,))
+                if not (idx1 == idx2).all():
+                    break
+            x[:, :, :, idx1[0], idx1[1]], x[:, :, :, idx2[0], idx2[1]] = x[:, :, :, idx2[0], idx2[1]].clone(), x[:, :, :, idx1[0], idx1[1]].clone()
+            jigsaw[:, 0, :, idx1[0], idx1[1]], jigsaw[:, 0, :, idx2[0], idx2[1]] = False, False
 
             # 5. Randomly swap two temporal blocks and update jigsaw
-            for i in range(B):
-                while True:
-                    idx1, idx2 = torch.randint(0, 8, (2,))
-                    if idx1.item() != idx2.item():
-                        break
-                x_position[:, :, idx1, :, :], x_position[:, :, idx2, :, :] = x_position[:, :, idx2, :, :].clone(), x_position[:, :, idx1, :, :].clone()
-                jigsaw[i, 1, idx1, :, :] = False
-                jigsaw[i, 1, idx2, :, :] = False
+            while True:
+                idx1, idx2 = torch.randint(0, 8, (2,))
+                if not (idx1 == idx2).all():
+                    break
+            x[:, :, idx1, :, :], x[:, :, idx2, :, :] = x[:, :, idx2, :, :].clone(), x[:, :, idx1, :, :].clone()
+            jigsaw[:, 1, idx1, :, :], jigsaw[:, 1, idx2, :, :] = False, False
+            
+            # 6. Transpose x[8, 768, 8, 14, 14] to [8, 1568, 768]
+            x = x.view(B, 768, -1)
+            x = x.transpose(1, 2)
 
-            # 6. Initialize an MLP and do binary classification
-            x_flat = x_position.view(B, 768, -1).permute(0, 2, 1)
-            x_position = self.mlp_jigsaw(x_flat)
+        # 7. Feedforward
+        if self.use_checkpoint:
+            for blk in self.blocks:
+                x = checkpoint.checkpoint(blk, x)
+        else:
+            for blk in self.blocks:
+                x = blk(x)
+        x = self.norm(x) # [8, 1568, 768]
+
+
+        if using_jigsaw:
+            
+            # 8. Transpose x to [8, 768, 8, 14, 14]
+            x = x.transpose(1, 2)
+            x = x.view(B, 768, 8, 14, 14)
+
+            # 9. Initialize an MLP and do binary classification
+            x_position = x.view(B, 768, -1).permute(0, 2, 1)
+            x_position = self.mlp_jigsaw(x_position)
+            x_position = x_position.transpose(1, 2)
             x_position = x_position.view(B, 2, 8, 14, 14)
 
-            # 7. Calculate cross-entropy loss
+            # 10. Calculate cross-entropy loss
             jigsaw = jigsaw.to(x_position.device)
             loss_position = F.cross_entropy(x_position, jigsaw.float())
+
+            # 11. Transpose x[8, 768, 8, 14, 14] to [8, 1568, 768]
+            x = x.view(B, 768, -1)
+            x = x.transpose(1, 2)
 
         if self.fc_norm is not None:
             out = self.fc_norm(x.mean(1))
         else:
             out = x[:, 0]
 
-        # [8, 768]
+        # x[8, 768]
         
         if using_jigsaw:
             return out, loss_position
@@ -364,8 +370,7 @@ class VisionTransformer(nn.Module):
         else:
             x = self.forward_features(x, using_jigsaw)
 
-        x = self.head(self.fc_dropout(x))
-        # [8, 174]
+        x = self.head(self.fc_dropout(x)) # [8, 174]
         if using_jigsaw:
             return x, loss_position
         else:

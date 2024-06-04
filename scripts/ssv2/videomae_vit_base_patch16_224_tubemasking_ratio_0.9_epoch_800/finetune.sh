@@ -4,7 +4,7 @@ OUTPUT_DIR='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_rat
 DATA_PATH='SSV/list_ssv2'
 # path to pretrain model
 # MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/checkpoint-799.pth'
-MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/mp_rank_00_model_states.pt'
+MODEL_PATH='SSV/ssv2_videomae_pretrain_base_patch16_224_frame_16x2_tube_mask_ratio_0.9_e800/eval_lr_5e-4_epoch_50/checkpoint-best/mp_rank_00_model_states.pt'
 
 # batch_size can be adjusted according to number of GPUs
 # this script is for 64 GPUs (8 nodes x 8 GPUs)
@@ -28,10 +28,9 @@ OMP_NUM_THREADS=1 torchrun --nproc_per_node=1 \
     --lr 5e-4 \
     --opt_betas 0.9 0.999 \
     --weight_decay 0.05 \
-    --epochs 44 \
+    --epochs 41 \
     --dist_eval \
     --test_num_segment 2 \
     --test_num_crop 3 \
     --enable_deepspeed \
-    --start_epoch 6
-
+    --start_epoch 9
