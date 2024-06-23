@@ -23,7 +23,7 @@ def train_class_batch(model, samples, target, criterion, using_jigsaw = True):
 
     if loss_position:
         total_loss = loss + loss_position
-        # print('loss: ', loss, ' - loss_position: ', loss_position)
+        print('loss: ', loss, ' - loss_position: ', loss_position)
     else:
         total_loss = loss
 

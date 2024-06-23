@@ -236,7 +236,7 @@ class VisionTransformer(nn.Module):
         self.head.weight.data.mul_(init_scale)
         self.head.bias.data.mul_(init_scale)
 
-        # Position Jigsaw
+        # using_jigsaw: Position Jigsaw
         self.mlp_jigsaw = nn.Sequential(
             nn.Linear(embed_dim, 512),
             nn.ReLU(),
@@ -276,6 +276,7 @@ class VisionTransformer(nn.Module):
             x = x + self.pos_embed.expand(B, -1, -1).type_as(x).to(x.device).clone().detach()
         x = self.pos_drop(x) # [8, 1568, 768]
 
+        # using_jigsaw
         # 1. 将self.pos_drop(x)得到的x从[8, 1568, 768] reshape回 [8, 768, 1568]；
         # 2. 将self.pos_drop(x)得到的x从[8, 768, 1568] reshape回 [8, 768, 8, 14, 14]；
         # 3. 初始化jigsaw = [8, 2, 8, 14, 14]为全True，其中第一维度表示batchsize，2表示有两种标签:[spatial_position, temporal_position]，[8, 14, 14]表示时间，高，宽；
